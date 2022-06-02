@@ -1,5 +1,5 @@
 #!groovy
-@Library('github.com/cloudogu/ces-build-lib@1.47.1')
+@Library('github.com/cloudogu/ces-build-lib@1.48.0')
 import com.cloudogu.ces.cesbuildlib.*
 
 String getDockerRegistryBaseUrl() { 'ghcr.io' }
@@ -23,14 +23,28 @@ properties([
 node('docker') {
 
     def git = new Git(this)
-
+    def mvn = new MavenWrapperInDocker(this, 'azul/zulu-openjdk-alpine:17.0.2')
+    // Avoid 'No such property: clusterName' error in 'Stop k3d' stage in builds that have failed in an early stage
+    clusterName = ''
+    
     timestamps {
         catchError {
-            timeout(activity: true, time: 30, unit: 'MINUTES') {
+            timeout(activity: false, time: 60, unit: 'MINUTES') {
 
                 stage('Checkout') {
                     checkout scm
                     git.clean('')
+                }
+
+                stage('Build cli') {
+                    mvn 'clean install -DskipTests'
+                }
+
+                // This interferes with the e2etests regarding the dependency download of grapes. It might be that the MavenWrapperInDocker somehow interferes with the FileSystem so that grapes is no longer to write to fs.
+                stage('Test cli') {
+                    mvn 'test -Dmaven.test.failure.ignore=true'
+                    // Archive test results. Makes build unstable on failed tests.
+                    junit testResults: '**/target/surefire-reports/TEST-*.xml'
                 }
 
                 stage('Build image') {
@@ -66,7 +80,7 @@ node('docker') {
                                 docker.image(imageName)
                                         .inside("-e KUBECONFIG=${env.WORKSPACE}/.kube/config " +
                                                 " --network=host --entrypoint=''" ) {
-                                            sh "./scripts/apply.sh --yes --trace --internal-registry-port=${registryPort} --argocd" 
+                                            sh "/app/scripts/apply.sh --yes --trace --internal-registry-port=${registryPort} --argocd"
                                         }
                             }
                         }
@@ -88,7 +102,10 @@ node('docker') {
                             // Avoids errors ("unable to resolve class") probably due to missing HOME for container in JVM.
                             .mountJenkinsUser() 
                             .inside("--network=${k3dNetwork}") {
-                            sh "groovy ./scripts/e2e.groovy --url http://${k3dAddress}:9090 --user admin --password admin"
+                                // removing m2 and grapes avoids issues where grapes primarily resolves local m2 and fails on missing versions
+                                sh "rm -rf .m2/"
+                                sh "rm -rf .groovy/grapes"
+                                sh "groovy ./scripts/e2e.groovy --url http://${k3dAddress}:9090 --user admin --password admin --writeFailedLog --fail --retry 2"
                     }
                 }
                stage('Push image') {
@@ -118,6 +135,11 @@ node('docker') {
         }
 
         stage('Stop k3d') {
+            // saving log artifacts is handled here since the failure of the integration test step leads directly here.
+            if (fileExists('playground-logs-of-failed-jobs')) {
+                archiveArtifacts artifacts: 'playground-logs-of-failed-jobs/*.log'
+            }
+
             if (clusterName) {
                 // Don't fail build if cleaning up fails
                 withEnv(["PATH=${WORKSPACE}/.k3d/bin:${PATH}"]) {

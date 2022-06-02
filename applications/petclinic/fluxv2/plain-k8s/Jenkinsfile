@@ -6,8 +6,8 @@ String getScmManagerCredentials() { 'scmm-user' }
 String getConfigRepositoryUrl() { "${env.SCMM_URL}/repo/fluxv2/gitops" }
 String getConfigRepositoryPRUrl() { "${env.SCMM_URL}/api/v2/pull-requests/fluxv2/gitops" }
 // The docker daemon cant use the k8s service name, because it is not running inside the cluster
-String getDockerRegistryBaseUrl() { "${env.REGISTRY_URL}" }
-String getDockerRegistryPath() { "${env.REGISTRY_PATH}" }
+String getDockerRegistryBaseUrl() { env.REGISTRY_URL }
+String getDockerRegistryPath() { env.REGISTRY_PATH }
 String getDockerRegistryCredentials() { 'registry-user' }
 String getCesBuildLibVersion() { '1.44.3' }
 String getCesBuildLibRepo() { "${env.SCMM_URL}/repo/common/ces-build-lib/" }
@@ -52,7 +52,9 @@ node {
             String imageTag = createImageTag()
             String pathPrefix = !dockerRegistryPath?.trim() ? "" : "${dockerRegistryPath}/"
             imageName = "${dockerRegistryBaseUrl}/${pathPrefix}${application}:${imageTag}"
-            mvn "spring-boot:build-image -DskipTests -Dspring-boot.build-image.imageName=${imageName}"
+            mvn "spring-boot:build-image -DskipTests -Dspring-boot.build-image.imageName=${imageName} " +
+                    // Pin builder image for reproducible builds. Update here to get newer JDK minor versions.
+                    "-Dspring-boot.build-image.builder=paketobuildpacks/builder:0.1.185-base "
 
             if (isBuildSuccessful()) {
                 def docker = cesBuildLib.Docker.new(this)

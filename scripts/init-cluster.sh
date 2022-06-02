@@ -20,7 +20,7 @@ function main() {
   else
     ACTUAL_K3D_VERSION="$(k3d --version | grep k3d | sed 's/k3d version v\(.*\)/\1/')"
     if [[ "${K3D_VERSION}" != "${ACTUAL_K3D_VERSION}" ]]; then
-      msg="WARN: GitOps playground was tested with ${K3D_VERSION}. You are running k3d ${ACTUAL_K3D_VERSION}."
+      echo "WARN: GitOps playground was tested with ${K3D_VERSION}. You are running k3d ${ACTUAL_K3D_VERSION}."
     fi
   fi
 
@@ -54,6 +54,10 @@ function createCluster() {
     '-v /etc/group:/etc/group@server[0]'
     # Persists the cache of Jenkins agents pods for faster builds
     '-v /tmp:/tmp@server[0]'
+    # Disable traefik (no ingresses used so far)
+    '--k3s-server-arg=--disable=traefik' 
+    # Disable servicelb (avoids "Pending" svclb pods and we use nodePorts right now anyway)
+    '--k3s-server-arg=--disable=servicelb' 
     # Pin k8s version via k3s image
     "--image=$K3S_VERSION" 
   )
@@ -82,7 +86,7 @@ function createCluster() {
   fi
 
   echo "Creating cluster ${CLUSTER_NAME}"
-  k3d cluster create ${CLUSTER_NAME} ${K3D_ARGS[*]} >/dev/null 2>&1;
+  k3d cluster create ${CLUSTER_NAME} ${K3D_ARGS[*]} >/dev/null
   
   if [[ ${isUsingArbitraryRegistryPort} == 'true' ]]; then
     local registryPort

@@ -1,4 +1,3 @@
-# For updating, delete pvc jenkins-docker-client
 dockerClientVersion: 20.10.2
 
 controller:
@@ -58,13 +57,13 @@ controller:
       value: /opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/tmp/docker
 
   customInitContainers:
-    # Create Jenkins agent working dir explicitly. Otherwise it seems to be owned by root
+    # Create Jenkins agent working dir explicitly. Otherwise, it seems to be owned by root
     # The does not need this folder, but creating it in a defined way and ownership on startup is better than to run an
     # InitContainer on each agent startup
     - name: create-agent-working-dir
       securityContext:
         runAsUser: 1000
-      image: bash:5.1.4
+      image: bash:5.1.16-alpine3.15
       imagePullPolicy: "{{ .Values.controller.imagePullPolicy }}"
       command: [ "/usr/local/bin/bash", "-c" ]
       args:
@@ -84,7 +83,7 @@ controller:
           find docker -type f -not -name 'docker' -delete;
           # Delete containerd, etc. We only need the docker CLI
           # Note: "wget -O- | tar" leads to the folder being owned by root, even when creating it beforehand?!
-          # That's
+        # That's
       volumeMounts:
         - name: host-tmp
           mountPath: /host-tmp

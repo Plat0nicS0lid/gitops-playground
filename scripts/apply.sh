@@ -8,9 +8,9 @@ export ABSOLUTE_BASEDIR
 PLAYGROUND_DIR="$(cd ${BASEDIR} && cd .. && pwd)"
 export PLAYGROUND_DIR
 
-PETCLINIC_COMMIT=044c968
+PETCLINIC_COMMIT=32c8653
 SPRING_BOOT_HELM_CHART_COMMIT=0.3.0
-ARGO_HELM_CHART_VERSION=2.17.5 # Last version with argo 1.x
+ARGO_HELM_CHART_VERSION=3.35.4 # Last version with argo 1.x
 
 source ${ABSOLUTE_BASEDIR}/utils.sh
 source ${ABSOLUTE_BASEDIR}/jenkins/init-jenkins.sh
@@ -42,13 +42,13 @@ JENKINS_PLUGIN_FOLDER=${JENKINS_PLUGIN_FOLDER:-''}
 function main() {
   
   readParameters "$@"
-  
+
   if [[ $ASSUME_YES == false ]]; then
     confirm "Applying gitops playground to kubernetes cluster: '$(kubectl config current-context)'." 'Continue? y/n [n]' ||
       # Return error here to avoid get correct state when used with kubectl
       exit 1
   fi
-  
+
   if [[ $TRACE == true ]]; then
     set -x
     # Trace without debug does not make to much sense, as the spinner spams the output
@@ -61,7 +61,7 @@ function main() {
   else
     RUNNING_INSIDE_K8S=false
   fi
-  
+
   CLUSTER_BIND_ADDRESS=$(findClusterBindAddress)
 
   if [[ $INSECURE == true ]]; then
@@ -98,9 +98,9 @@ function main() {
     if [[ -n "${INTERNAL_REGISTRY_PORT}" ]]; then
       registryPort="${INTERNAL_REGISTRY_PORT}"
     fi
-    # Internal Docker registry must be on localhost. Otherwise docker will use HTTPS, leading to errors on docker push 
+    # Internal Docker registry must be on localhost. Otherwise docker will use HTTPS, leading to errors on docker push
     # in the example application's Jenkins Jobs.
-    # Both setting up HTTPS or allowing insecure registry via daemon.json makes the playground difficult to use. 
+    # Both setting up HTTPS or allowing insecure registry via daemon.json makes the playground difficult to use.
     # So, always use localhost.
     # Allow overriding the port, in case multiple playground instance run on a single host in different k3d clusters.
     REGISTRY_URL="localhost:${registryPort}"
@@ -115,6 +115,7 @@ function main() {
     backgroundLogFile=$(mktemp /tmp/playground-log-XXXXXXXXX)
     echo "Full log output is appended to ${backgroundLogFile}"
   fi
+
 
   evalWithSpinner "Basic setup & configuring registry..." applyBasicK8sResources
 
@@ -136,6 +137,10 @@ function main() {
   if [[ $TRACE == true ]]; then
     set +x
   fi
+
+  # call our groovy cli and pass in all params
+  "$PLAYGROUND_DIR"/apply-ng "$@"
+
   printWelcomeScreen
 }
 
@@ -204,6 +209,13 @@ function checkPrerequisites() {
       exit 1
     fi
   fi
+
+  if [[ $INSTALL_ALL_MODULES == false && $INSTALL_ARGOCD == false ]]; then
+    if [[ ${DEPLOY_METRICS} == true ]]; then
+      error "Metrics module only available in conjunction with ArgoCD"
+      exit 1
+    fi
+  fi
 }
 
 function applyBasicK8sResources() {
@@ -220,6 +232,9 @@ function applyBasicK8sResources() {
     helm repo add jenkins https://charts.jenkins.io
     helm repo update
   fi
+
+  # crd for servicemonitor. a prometheus operator specific resource
+  kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/kube-prometheus/v0.9.0/manifests/setup/prometheus-operator-0servicemonitorCustomResourceDefinition.yaml
 
   initRegistry
 }
@@ -272,7 +287,7 @@ function initSCMM() {
   # They contain Repository URLs create with BASE_URL. Jenkins uses the internal URL for repos. So match is only
   # successful, when SCM also sends the Repo URLs using the internal URL
   configureScmmManager "${SCMM_USERNAME}" "${SCMM_PASSWORD}" "${SCMM_URL}" "${JENKINS_URL_FOR_SCMM}" \
-    "${SCMM_URL_FOR_JENKINS}" "${INTERNAL_SCMM}"
+    "${SCMM_URL_FOR_JENKINS}" "${INTERNAL_SCMM}" "${INSTALL_FLUXV1}" "${INSTALL_FLUXV2}" "${INSTALL_ARGOCD}"
 
   pushHelmChartRepo 'common/spring-boot-helm-chart'
   pushHelmChartRepoWithDependency 'common/spring-boot-helm-chart-with-dependency'
@@ -300,7 +315,9 @@ function initFluxV1() {
   initRepo 'fluxv1/gitops'
   pushPetClinicRepo 'applications/petclinic/fluxv1/plain-k8s' 'fluxv1/petclinic-plain'
   pushPetClinicRepo 'applications/petclinic/fluxv1/helm' 'fluxv1/petclinic-helm'
-  initRepoWithSource 'applications/nginx/fluxv1' 'fluxv1/nginx-helm'
+  # Set NodePort service, to avoid "Pending" services on local cluster
+  initRepoWithSource 'applications/nginx/fluxv1' 'fluxv1/nginx-helm' \
+      "if [[ $REMOTE_CLUSTER != true ]]; then find . -name values-shared.yaml -exec bash -c '(echo && echo service.type: NodePort && echo) >> {}' \; ; fi"
 
   SET_GIT_URL=""
   if [[ ${INTERNAL_SCMM} == false ]]; then
@@ -341,7 +358,7 @@ function initArgo() {
   fi
 
   if [[ ${ARGOCD_CONFIG_ONLY} == false ]]; then
-    
+
     helm upgrade -i argocd --values "${VALUES_YAML_PATH}" \
       $(argoHelmSettingsForLocalCluster) --version ${ARGO_HELM_CHART_VERSION} argo/argo-cd -n argocd
 
@@ -356,8 +373,16 @@ function initArgo() {
   pushPetClinicRepo 'applications/petclinic/argocd/plain-k8s' 'argocd/petclinic-plain'
   pushPetClinicRepo 'applications/petclinic/argocd/helm' 'argocd/petclinic-helm'
   initRepo 'argocd/gitops'
-  initRepoWithSource 'applications/nginx/argocd' 'argocd/nginx-helm'
-  initRepoWithSource 'argocd/control-app' 'argocd/control-app'
+#  initRepoWithSource 'argocd/control-app' 'argocd/control-app' metricsConfiguration
+
+  # Set NodePort service, to avoid "Pending" services and "Processing" state in argo on local cluster
+  initRepoWithSource 'applications/nginx/argocd' 'argocd/nginx-helm' \
+    "if [[ $REMOTE_CLUSTER != true ]]; then find . -name values-shared.yaml -exec bash -c '(echo && echo service: && echo \"  type: NodePort\" ) >> {}' \; ; fi"
+
+  # init exercise
+  pushPetClinicRepo 'exercises/petclinic-helm' 'exercises/petclinic-helm'
+  initRepoWithSource 'exercises/nginx-validation' 'exercises/nginx-validation'
+  initRepoWithSource 'exercises/broken-application' 'exercises/broken-application'
 }
 
 function replaceAllScmmUrlsInFolder() {
@@ -469,6 +494,11 @@ function pushPetClinicRepo() {
 
     replaceAllImagesInJenkinsfile "${TMP_REPO}/Jenkinsfile"
 
+    if [[ $REMOTE_CLUSTER != true ]]; then
+      # Set NodePort service, to avoid "Pending" services and "Processing" state in argo
+      find . \( -name service.yaml -o -name values-shared.yaml \) -exec sed -i "s/LoadBalancer/NodePort/" {} \;
+    fi
+
     git checkout -b main --quiet
     git add .
     git commit -m 'Add GitOps Pipeline and K8s resources' --quiet
@@ -568,9 +598,8 @@ function initRepo() {
   (
     cd "${TMP_REPO}"
     git checkout main --quiet || git checkout -b main --quiet
-    echo "# gitops" >README.md
     echo $'.*\n!/.gitignore' >.gitignore
-    git add README.md .gitignore
+    git add .gitignore
     # exits with 1 if there were differences and 0 means no differences.
     if ! git diff-index --exit-code --quiet HEAD --; then
       git commit -m "Add readme" --quiet
@@ -586,6 +615,7 @@ function initRepoWithSource() {
   echo "initiating repo $1 with source $2"
   SOURCE_REPO="$1"
   TARGET_REPO_SCMM="$2"
+  EVAL_IN_REPO="${3-}"
 
   TMP_REPO=$(mktemp -d)
 
@@ -596,6 +626,11 @@ function initRepoWithSource() {
     if [[ ${INTERNAL_SCMM} == false ]]; then
       replaceAllScmmUrlsInFolder "${TMP_REPO}"
     fi
+
+    if [[ -n "${EVAL_IN_REPO}" ]]; then
+      eval "${EVAL_IN_REPO}"
+    fi
+
     git checkout main --quiet || git checkout -b main --quiet
     git add .
     git commit -m "Init ${TARGET_REPO_SCMM}" --quiet || true
@@ -607,6 +642,39 @@ function initRepoWithSource() {
 
   setDefaultBranch "${TARGET_REPO_SCMM}"
 }
+
+#function metricsConfiguration() {
+#
+#  if [[ $REMOTE_CLUSTER != true ]]; then
+#      # Set NodePort service, to avoid "Pending" services and "Processing" state in argo
+#      sed -i "s/LoadBalancer/NodePort/" "applications/application-mailhog-helm.yaml"
+#  fi
+#
+#  if [[ $ARGOCD_URL != "" ]]; then
+#      sed -i "s|argocdUrl: http://localhost:9092|argocdUrl: $ARGOCD_URL|g" "applications/application-argocd-notifications.yaml"
+#  fi
+#
+#  if [[ $DEPLOY_METRICS == true ]]; then
+#
+#    kubectl apply -f "${PLAYGROUND_DIR}/metrics/grafana/dashboards" || true
+#
+#    ARGOCD_APP_PROMETHEUS_STACK="applications/application-kube-prometheus-stack-helm.yaml"
+#
+#    if [[ ${SET_USERNAME} != "admin" ]]; then
+#      FROM_USERNAME_STRING='adminUser: admin'
+#      TO_USERNAME_STRING="adminUser: ${SET_USERNAME}"
+#      sed -i -e "s%${FROM_USERNAME_STRING}%${TO_USERNAME_STRING}%g" "${ARGOCD_APP_PROMETHEUS_STACK}"
+#    fi
+#
+#    if [[ ${SET_PASSWORD} != "admin" ]]; then
+#      FROM_PASSWORD_STRING='adminPassword: admin'
+#      TO_PASSWORD_STRING="adminPassword: ${SET_PASSWORD}"
+#      sed -i -e "s%${FROM_PASSWORD_STRING}%${TO_PASSWORD_STRING}%g" "${ARGOCD_APP_PROMETHEUS_STACK}"
+#    fi
+#  else
+#      rm -f "applications/application-kube-prometheus-stack-helm.yaml"
+#  fi
+#}
 
 function setDefaultBranch() {
   TARGET_REPO_SCMM="$1"
@@ -789,6 +857,9 @@ function printParameters() {
   echo "    | --registry-password=myPassword  >> Optional when --registry-url is set"
   echo "    | --internal-registry-port         >> Port of registry registry. Ignored when registry-url is set."
   echo
+  echo "Configure ArgoCD."
+  echo "    | --argocd-url=http://my-argo.com    >> The URL where argocd is accessible. It has to be the full URL with http:// or https://"
+  echo
   echo "Configure images used by the gitops-build-lib in the application examples"
   echo "    | --kubectl-image      >> Sets image for kubectl"
   echo "    | --helm-image         >> Sets image for helm"
@@ -800,6 +871,9 @@ function printParameters() {
   echo "    | --skip-helm-update    >> Skips adding and updating helm repos"
   echo "    | --argocd-config-only  >> Skips installing argo-cd. Applies ConfigMap and Application manifests to bootstrap existing argo-cd"
   echo
+  echo "Configure additional modules"
+  echo "    | --metrics       >> Installs the Kube-Prometheus-Stack for ArgoCD. This includes Prometheus, the Prometheus operator, Grafana and some extra resources"
+  echo
   echo " -d | --debug         >> Debug output"
   echo " -x | --trace         >> Debug + Show each command executed (set -x)"
   echo " -y | --yes           >> Skip kubecontext confirmation"
@@ -808,7 +882,7 @@ function printParameters() {
 readParameters() {
   COMMANDS=$(getopt \
     -o hdxyc \
-    --long help,fluxv1,fluxv2,argocd,debug,remote,username:,password:,jenkins-url:,jenkins-username:,jenkins-password:,registry-url:,registry-path:,registry-username:,registry-password:,internal-registry-port:,scmm-url:,scmm-username:,scmm-password:,kubectl-image:,helm-image:,kubeval-image:,helmkubeval-image:,yamllint-image:,trace,insecure,yes,skip-helm-update,argocd-config-only: \
+    --long help,fluxv1,fluxv2,argocd,debug,remote,username:,password:,jenkins-url:,jenkins-username:,jenkins-password:,registry-url:,registry-path:,registry-username:,registry-password:,internal-registry-port:,scmm-url:,scmm-username:,scmm-password:,kubectl-image:,helm-image:,kubeval-image:,helmkubeval-image:,yamllint-image:,trace,insecure,yes,skip-helm-update,argocd-config-only,metrics,argocd-url: \
     -- "$@")
   
   if [ $? != 0 ]; then
@@ -847,6 +921,8 @@ readParameters() {
   ASSUME_YES=false
   SKIP_HELM_UPDATE=false
   ARGOCD_CONFIG_ONLY=false
+  DEPLOY_METRICS=false
+  ARGOCD_URL=""
   
   while true; do
     case "$1" in
@@ -879,6 +955,8 @@ readParameters() {
       -y | --yes           ) ASSUME_YES=true; shift ;;
       --skip-helm-update   ) SKIP_HELM_UPDATE=true; shift ;;
       --argocd-config-only ) ARGOCD_CONFIG_ONLY=true; shift ;;
+      --metrics            ) DEPLOY_METRICS=true; shift;;
+      --argocd-url         ) ARGOCD_URL="$2"; shift 2 ;;
       --                   ) shift; break ;;
     *) break ;;
     esac

@@ -3,12 +3,14 @@
 
 # Allowlist
 !applications/
+!exercises/
 !argocd/
 !docker-registry/
 !fluxv1/
 !fluxv2/
 !jenkins/
 !k8s-namespaces/
+!metrics/
 !scm-manager/
 !scripts/jenkins/
 !scripts/scm-manager/
@@ -17,3 +19,10 @@
 !scripts/utils.sh
 !.curlrc
 !LICENSE
+
+# groovy cli
+!src
+!pom.xml
+!mvnw
+!.mvn
+!compiler.groovy
