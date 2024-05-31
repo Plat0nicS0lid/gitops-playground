@@ -1,5 +1,0 @@
-#namespace: argocd-staging
-service:
-  port: 80
-  nodePorts:
-    http: 30024

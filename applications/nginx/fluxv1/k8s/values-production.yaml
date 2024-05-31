@@ -1,5 +1,0 @@
-namespace: fluxv1-production
-service:
-  port: 80
-  nodePorts:
-    http: 30007

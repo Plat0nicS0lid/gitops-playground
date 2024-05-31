@@ -1,6 +1,14 @@
-dockerClientVersion: 20.10.2
+# For updating, delete pvc jenkins-docker-client
+dockerClientVersion: 24.0.6
 
 controller:
+  image:
+    registry: ghcr.io
+    repository: cloudogu/jenkins-helm
+    # Use same version here as in ApplicationConfigurator.groovy (config.jenkins['helm']['version'])
+    tag: "5.1.0"
+  installPlugins: false
+  
   # to prevent the jenkins-ui-test pod being created
   testEnabled: false
 
@@ -8,23 +16,6 @@ controller:
   servicePort: 80
   # Is ignored when type is LoadBalancer. For local cluster we change the service type to NodePort
   nodePort: 9090
-
-  # It seems that jenkins-plugin-cli 2.9.0 does not install plugin dependencies properly.
-  # So we add them explicitly here, to avoid exception such as 
-  #  Failed to load: Matrix Project Plugin (1.18)
-  # Background: When debugging, the following command
-  #  jenkins-plugin-cli --war "/usr/share/jenkins/jenkins.war" --plugins matrix-project:1.18 --verbose
-  # returns: matrix-project has no dependencies
-  # But the following command: 
-  # jenkins-plugin-cli --war "/usr/share/jenkins/jenkins.war" --plugins matrix-project:1.18 --verbose
-  # Returns: matrix-project depends on: junit 1.50 script-security 1.77
-  # Workaround: Install the plugins that cause these problems explicitly
-  additionalPlugins:
-    - matrix-project:1.19
-    - workflow-cps:2.93
-    - pipeline-model-api:1.9.1
-    - workflow-job:2.41
-    - credentials-binding:1.27
 
   # Don't use controller for builds
   numExecutors: 0
@@ -47,6 +38,7 @@ controller:
 
   admin:
     # Use reproducible admin password from secret. Change there, if necessary.
+    #createSecret: false
     existingSecret: jenkins-credentials
 
   containerEnv:
@@ -63,7 +55,8 @@ controller:
     - name: create-agent-working-dir
       securityContext:
         runAsUser: 1000
-      image: bash:5.1.16-alpine3.15
+      # Note: When upgrading, use same image as in gid-grepper for performance reasons
+      image: bash:5-alpine3.19
       imagePullPolicy: "{{ .Values.controller.imagePullPolicy }}"
       command: [ "/usr/local/bin/bash", "-c" ]
       args:
@@ -96,8 +89,6 @@ persistence:
         path: /tmp
 
 agent:
-  # We need JDK11 for our PetClinic example
-  tag: "4.6-1-jdk11"
   # In our local playground infrastructure builds are run in agent containers (pods). During the builds, more
   # containers are started via the Jenkins Docker Plugin (on the same docker host).
   # This leads to a scenario where the agent container tries to mount its filesystem into another container.
@@ -123,7 +114,7 @@ agent:
   resources:
     limits:
       cpu: "1"
-      memory: "1Gi"
+      memory: "4Gi"
   envVars:
     - name: PATH
       # Add /tmp/docker to the path
@@ -150,5 +141,4 @@ agent:
   # Controls how agent pods are retained after the Jenkins build completes
   # Not in Jenkins but in K8s. Helpful for debugging
   # In order to get rid of those many "default-xyz" pod use: kubectl delete pod -l jenkins/jenkins-jenkins-agent=true
-  podRetention: "OnFailure"
-
+  podRetention: "Always"

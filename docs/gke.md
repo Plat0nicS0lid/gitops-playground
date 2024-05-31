@@ -1,8 +1,12 @@
 ### Google Kubernetes Engine
 
+⚠️ Note that since k8s 1.24 [GKE no longer supports nodes with docker](https://cloud.google.com/kubernetes-engine/docs/deprecations/docker-containerd).
+That is why the **Jenkins deployed on GKE can no longer successfully run builds that use the `docker` step** in K8s agent Pods.
+We recommend setting up [GCP VMs as build agents](https://cloud.google.com/architecture/using-jenkins-for-distributed-builds-on-compute-engine#configuring_jenkins_plugins).
+
 #### Prerequisites
 
-You will need the `OWNER` role fpr GKE, because `apply.sh` applies `ClusterRoles`, which is only allowed to owners.
+You will need the `OWNER` role fpr GKE, because we need `ClusterRoles`, which are only allowed to owners.
 
 #### Create Cluster using Terraform
 The following steps are deploying a k8s cluster with a node pool to GKE in the europe-west-3 region.
@@ -93,7 +97,10 @@ gcloud container clusters get-credentials ${cluster_name} --zone ${gce_location}
 
 Now you're ready to apply the apps to the cluster.
 
-Note that you need to pass the `--remote` flag when applying the playground.
+Note that to be able to access the services remotely you either need to pass the
+* `--remote` flag (exposes alls services as `LoadBalancer` with external IP) or
+* `--ingress-nginx --base-url=$yourdomain` and either set a DNS record or `/etc/hosts` entries to the external IP of the
+  ingress-nginx service. 
 
 ##### Clean up
 
